@@ -1,6 +1,7 @@
 #!/usr/bin/env ruby
 
 require 'sinatra'
+require 'rb-inotify'
 require 'yaml'
 require 'yaml/store'
 require 'json'
@@ -48,12 +49,35 @@ helpers do
   alias_method :h, :escape_html
 end
 
+# --- background jobs ---
+file_observer = Thread.new do
+  if File.file? '/proc/sys/fs/inotify/max_user_watches'
+    max_user_watches = File.open('/proc/sys/fs/inotify/max_user_watches').read
+    if max_user_watches.to_i < 5000
+      $log.info "You should increase fs.inotify.max_user_watches to at least 5000"
+    end
+  end
+
+  loop do
+    notifier = INotify::Notifier.new
+    $log.info "Start watching #{DB_DIR} ..."
+    notifier.watch(DB_DIR, :recursive, :modify, :create) do |event|
+      $log.info "#{event.absolute_name} changed!"
+    end
+    notifier.run
+  end
+end
+
 # --- filter ---
 before do
   headers JSON_CONTENT_TYPE
 end
 
 # --- getter ---
+get '/watcher' do
+  file_observer.alive?.to_json
+end
+
 get '/properties/*/key/:key.filename' do
   result = get_relevantfile(params[:splat].first, params[:key])
 
