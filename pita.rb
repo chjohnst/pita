@@ -8,8 +8,9 @@ require 'log4r'
 
 include Log4r
 
-BASE_DIR    = File.dirname(__FILE__)
+BASE_DIR    = File.join(File.dirname(__FILE__), 'var')
 DB_DIR      = File.join(BASE_DIR, 'db')
+VIEW_DIR    = File.join(BASE_DIR, 'views')
 LOG_FILE    = File.join(BASE_DIR, 'log', 'pita.log')
 LOG_LEVEL   = 'DEBUG'
 
@@ -26,9 +27,7 @@ if jruby = RUBY_PLATFORM =~ /\bjava\b/
   require 'java'
   java_import java.lang.System
   include_class 'java.lang.StringIndexOutOfBoundsException'
-  CONTEXT = '/pita'
 else
-  CONTEXT = ''
   class StringIndexOutOfBoundsException < StandardError  
   end  
 end
@@ -106,6 +105,14 @@ end
   end
 end
 
+get '/view/*' do
+  read_view(params[:splat].first).to_json
+end
+
+get '/views' do
+  list_views.to_json
+end
+
 get '/*' do
   return_error( 404, "Request doesn't match a valid route" )
 end
@@ -157,11 +164,10 @@ def list_entries(path)
   working_dir = File.join( DB_DIR, path )
   
   if File.directory? working_dir
-    Dir.glob( File.join( working_dir, '*.yaml' ) ) do |entrie|
+    Dir.glob( File.join( working_dir, '*.yaml' ) ) do |entry|
       finding = Hash.new
-
-      finding['name'] = File.basename(entrie, '.yaml')
-      if File.directory?(File.join(File.split(entrie).first, finding['name']))
+      finding['name'] = File.basename(entry, '.yaml')
+      if File.directory?(File.join(File.split(entry).first, finding['name']))
         finding['type'] = 'Directory'
       else
         finding['type'] = 'File'
@@ -180,6 +186,25 @@ def list_entries(path)
     return_error( 404, "Can not find any data under '#{working_dir}'" )    
   end
   
+  return result
+end
+
+def list_views
+  result      = []
+
+  if File.directory? VIEW_DIR
+    Dir.glob( File.join( VIEW_DIR, '*.yaml' ) ) do |entry|
+      finding = Hash.new
+      finding['name'] = File.basename(entry, '.yaml')
+      finding['type'] = 'View'
+      finding['url']  = uri(File.join('view', finding['name']))
+
+      result << finding
+    end
+  else
+    return_error( 404, "Can not find any view under '#{VIEW_DIR}'" )
+  end
+
   return result
 end
 
@@ -209,6 +234,23 @@ def read_data(path, options={})
       else
         data.merge!( sub_data )
       end
+    end
+  end
+  return data
+end
+
+def read_view(view)
+  list = load_yaml(File.join(VIEW_DIR, "#{File.basename(view, '.yaml')}.yaml"))
+  data = Hash.new
+  type = list.keys.first
+  list[type].each do |entry|
+    case type
+      when 'list'
+        data[entry] = read_data(entry)
+      when 'merge'
+        data = data.merge! read_data(entry)
+      else
+        return_error( 406, "View type #{type} is not allowed" )
     end
   end
   return data
