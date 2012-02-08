@@ -2,6 +2,7 @@
 
 require 'sinatra'
 require 'rb-inotify'
+require 'em-http'
 require 'yaml'
 require 'yaml/store'
 require 'json'
@@ -14,6 +15,7 @@ DB_DIR      = File.join(BASE_DIR, 'db')
 VIEW_DIR    = File.join(BASE_DIR, 'views')
 LOG_FILE    = File.join(BASE_DIR, 'log', 'pita.log')
 LOG_LEVEL   = 'DEBUG'
+CALLBACK_FILE = File.join(BASE_DIR, 'callbacks.yaml')
 
 set :environment, :development
 # ---------------------------------------------------
@@ -60,9 +62,16 @@ file_observer = Thread.new do
 
   loop do
     notifier = INotify::Notifier.new
-    $log.info "Start watching #{DB_DIR} ..."
-    notifier.watch(DB_DIR, :recursive, :modify, :create) do |event|
-      $log.info "#{event.absolute_name} changed!"
+    $log.info "Observe #{DB_DIR} for changes."
+    notifier.watch(DB_DIR, :recursive, :modify) do |event|
+      changed_file = event.absolute_name.sub(/#{DB_DIR}/, '')
+      $log.debug "#{changed_file} changed! Evaluate callbacks."
+      load_yaml(CALLBACK_FILE).each do |path, callback_url|
+        if changed_file == path
+          $log.info "Callback triggered for #{path}. Will request #{callback_url}"
+          EM::HttpRequest.new(callback_url).get
+        end
+      end
     end
     notifier.run
   end
