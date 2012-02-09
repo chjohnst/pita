@@ -1,0 +1,7 @@
+---
+database_directory: './var/db'
+view_directory:     './var/views'
+callback_file:      './var/callbacks.yaml'
+log_file:           './var/log/pita.log'
+log_level:          'DEBUG'
+

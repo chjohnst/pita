@@ -10,12 +10,12 @@ require 'log4r'
 
 include Log4r
 
-BASE_DIR    = File.join(File.dirname(__FILE__), 'var')
-DB_DIR      = File.join(BASE_DIR, 'db')
-VIEW_DIR    = File.join(BASE_DIR, 'views')
-LOG_FILE    = File.join(BASE_DIR, 'log', 'pita.log')
-LOG_LEVEL   = 'DEBUG'
-CALLBACK_FILE = File.join(BASE_DIR, 'callbacks.yaml')
+config = YAML::load_file(File.join(File.dirname(__FILE__), 'etc', 'config.yaml'))
+DB_DIR        = config['database_directory']
+VIEW_DIR      = config['view_directory']
+LOG_FILE      = config['log_file']
+LOG_LEVEL     = config['log_level']
+CALLBACK_FILE = config['callback_file']
 
 # ---------------------------------------------------
 JSON_CONTENT_TYPE = { 'Content-Type' => "application/json;charset=utf-8" }
