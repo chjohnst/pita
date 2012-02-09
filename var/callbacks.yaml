@@ -1,2 +1,3 @@
 ---
 '/int.yaml': 'http://www.google.com'
+'/uat.yaml': '/bin/true'

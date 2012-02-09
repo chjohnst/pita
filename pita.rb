@@ -17,7 +17,6 @@ LOG_FILE    = File.join(BASE_DIR, 'log', 'pita.log')
 LOG_LEVEL   = 'DEBUG'
 CALLBACK_FILE = File.join(BASE_DIR, 'callbacks.yaml')
 
-set :environment, :development
 # ---------------------------------------------------
 JSON_CONTENT_TYPE = { 'Content-Type' => "application/json;charset=utf-8" }
 
@@ -43,8 +42,6 @@ $log            = Logger.new 'PITA'
 $log.trace      = false
 $log.add(outputter)
 
-$log.info "Database up and running!"
-
 # --- helper ---
 helpers do
   include Rack::Utils
@@ -66,10 +63,27 @@ file_observer = Thread.new do
     notifier.watch(DB_DIR, :recursive, :modify) do |event|
       changed_file = event.absolute_name.sub(/#{DB_DIR}/, '')
       $log.debug "#{changed_file} changed! Evaluate callbacks."
-      load_yaml(CALLBACK_FILE).each do |path, callback_url|
+      load_yaml(CALLBACK_FILE).each do |path, action|
         if changed_file == path
-          $log.info "Callback triggered for #{path}. Will request #{callback_url}"
-          EM::HttpRequest.new(callback_url).get
+          if File.executable? action.split(/ /).first
+            $log.info "Callback triggered for #{path}. Will execute #{action}"
+            begin
+              run = EM::DeferrableChildProcess.open(action)
+              run.callback{$log.info "Command finished."}
+            rescue Exception => e
+              $log.error "Can not run command #{action}"
+              $log.debug e.message
+            end
+          else
+            $log.info "Callback triggered for #{path}. Will request #{action}"
+            begin
+              request = EM::HttpRequest.new(action).get
+              request.callback{$log.info "Request finished."}
+            rescue Exception => e
+              $log.error "Can not request url #{action}"
+              $log.debug e.message
+            end
+          end
         end
       end
     end
@@ -82,11 +96,9 @@ before do
   headers JSON_CONTENT_TYPE
 end
 
-# --- getter ---
-get '/watcher' do
-  file_observer.alive?.to_json
-end
+$log.info "Database up and running!"
 
+# --- getter ---
 get '/properties/*/key/:key.filename' do
   result = get_relevantfile(params[:splat].first, params[:key])
 
@@ -138,12 +150,16 @@ end
   end
 end
 
+get '/views' do
+  list_views.to_json
+end
+
 get '/view/*' do
   read_view(params[:splat].first).to_json
 end
 
-get '/views' do
-  list_views.to_json
+post '/view' do
+  read_view(request.body.read.to_s).to_json
 end
 
 get '/*' do
@@ -273,7 +289,16 @@ def read_data(path, options={})
 end
 
 def read_view(view)
-  list = load_yaml(File.join(VIEW_DIR, "#{File.basename(view, '.yaml')}.yaml"))
+  filename = File.join(VIEW_DIR, "#{File.basename(view, '.yaml')}.yaml")
+  if File.file?(filename)
+    list = load_yaml(filename)
+  else
+    begin
+      list = JSON.parse view
+    rescue
+      return_error( 400, "Can not parse your view data: #{view}" )
+    end
+  end
   data = Hash.new
   type = list.keys.first
   list[type].each do |entry|
