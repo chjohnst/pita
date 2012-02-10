@@ -2,6 +2,7 @@
 
 require 'sinatra'
 require 'rb-inotify'
+require 'eventmachine'
 require 'em-http'
 require 'yaml'
 require 'yaml/store'
@@ -14,12 +15,8 @@ include Log4r
 $config = YAML::load_file(File.join(File.dirname(__FILE__), 'etc', 'config.yaml'))
 
 if jruby = RUBY_PLATFORM =~ /\bjava\b/
-  require 'java'
-  java_import java.lang.System
-  include_class 'java.lang.StringIndexOutOfBoundsException'
-else
-  class StringIndexOutOfBoundsException < StandardError  
-  end  
+  puts "Sorry, jruby is not supported!"
+  exit 1
 end
 
 # initialzie logging
@@ -36,7 +33,7 @@ helpers do
   alias_method :h, :escape_html
 end
 
-# --- background jobs ---
+# --- background thread ---
 file_observer = Thread.new do
   if File.file? '/proc/sys/fs/inotify/max_user_watches'
     max_user_watches = File.open('/proc/sys/fs/inotify/max_user_watches').read
@@ -45,36 +42,41 @@ file_observer = Thread.new do
     end
   end
 
-  loop do
-    notifier = INotify::Notifier.new
-    $log.info "Observe #{$config['database_directory']} for changes."
-    notifier.watch($config['database_directory'], :recursive, :modify) do |event|
-      changed_file = event.absolute_name.sub(/#{$config['database_directory']}/, '')
-      $log.debug "#{changed_file} changed! Evaluate callbacks."
-      load_yaml($config['callback_file']).each do |path, action|
-        if changed_file == path
-          if File.executable? action.split(/ /).first
-            $log.info "Callback triggered for #{path}. Will execute #{action}"
-            begin
-              run = EM::DeferrableChildProcess.open(action)
-              run.callback{$log.info "Command finished."}
-            rescue Exception => e
-              $log.error "Can not run command #{action}"
-              $log.debug e.message
-            end
-          else
-            $log.info "Callback triggered for #{path}. Will request #{action}"
-            begin
-              request = EM::HttpRequest.new(action).get
-              request.callback{$log.info "Request finished."}
-            rescue Exception => e
-              $log.error "Can not request url #{action}"
-              $log.debug e.message
-            end
+  notifier = INotify::Notifier.new
+  $log.info "Observe #{$config['database_directory']} for changes."
+  notifier.watch($config['database_directory'], :recursive, :modify) do |event|
+    changed_file = event.absolute_name.sub(/#{$config['database_directory']}/, '')
+    $log.debug "#{changed_file} changed! Evaluate callbacks."
+    load_yaml($config['callback_file']).each do |path, action|
+      if changed_file == path
+        if File.executable? action.split(/ /).first
+          $log.info "Callback triggered for #{path}. Will execute #{action}"
+          begin
+            run = EM::DeferrableChildProcess.open(action)
+            run.callback{$log.info "Command finished."}
+          rescue Exception => e
+            $log.error "Can not run command #{action}"
+            $log.debug e.message
+          end
+        else
+          $log.info "Callback triggered for #{path}. Will request #{action}"
+          begin
+            request = EM::HttpRequest.new(action).get
+            request.callback{$log.info "Request finished."}
+          rescue Exception => e
+            $log.error "Can not request url #{action}"
+            $log.debug e.message
           end
         end
       end
     end
+  end
+
+  if not EM.reactor_running? 
+    EM.run do
+      notifier.run
+    end
+  else
     notifier.run
   end
 end
