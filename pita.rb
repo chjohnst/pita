@@ -10,20 +10,8 @@ require 'log4r'
 
 include Log4r
 
-config = YAML::load_file(File.join(File.dirname(__FILE__), 'etc', 'config.yaml'))
-DB_DIR        = config['database_directory']
-VIEW_DIR      = config['view_directory']
-LOG_FILE      = config['log_file']
-LOG_LEVEL     = config['log_level']
-CALLBACK_FILE = config['callback_file']
-
-# ---------------------------------------------------
-JSON_CONTENT_TYPE = { 'Content-Type' => "application/json;charset=utf-8" }
-
-KCODE = 'u' if RUBY_VERSION < '1.9'
-before do
-  content_type :html, 'charset' => 'utf-8'
-end
+# load configuration settings
+$config = YAML::load_file(File.join(File.dirname(__FILE__), 'etc', 'config.yaml'))
 
 if jruby = RUBY_PLATFORM =~ /\bjava\b/
   require 'java'
@@ -36,8 +24,8 @@ end
 
 # initialzie logging
 outputter       = Log4r::FileOutputter.new('PITA_LOG_FILE', \
-                                            :filename => LOG_FILE)
-outputter.level = Log4r::Log4rConfig::LogLevels.index(LOG_LEVEL) + 1
+                                            :filename => $config['log_file'])
+outputter.level = Log4r::Log4rConfig::LogLevels.index($config['log_level']) + 1
 $log            = Logger.new 'PITA'
 $log.trace      = false
 $log.add(outputter)
@@ -59,11 +47,11 @@ file_observer = Thread.new do
 
   loop do
     notifier = INotify::Notifier.new
-    $log.info "Observe #{DB_DIR} for changes."
-    notifier.watch(DB_DIR, :recursive, :modify) do |event|
-      changed_file = event.absolute_name.sub(/#{DB_DIR}/, '')
+    $log.info "Observe #{$config['database_directory']} for changes."
+    notifier.watch($config['database_directory'], :recursive, :modify) do |event|
+      changed_file = event.absolute_name.sub(/#{$config['database_directory']}/, '')
       $log.debug "#{changed_file} changed! Evaluate callbacks."
-      load_yaml(CALLBACK_FILE).each do |path, action|
+      load_yaml($config['callback_file']).each do |path, action|
         if changed_file == path
           if File.executable? action.split(/ /).first
             $log.info "Callback triggered for #{path}. Will execute #{action}"
@@ -93,7 +81,7 @@ end
 
 # --- filter ---
 before do
-  headers JSON_CONTENT_TYPE
+  headers 'Content-Type' => "application/json;charset=utf-8"
 end
 
 $log.info "Database up and running!"
@@ -175,7 +163,6 @@ put '/properties/*' do
   end
 
   update_yaml( params[:splat].first, data )
-
   redirect '/', 200
 end
 
@@ -191,7 +178,6 @@ post '/*' do
   end
   
   create_empty_yaml( data['path'] )
-
   redirect '/', 200
 end
 
@@ -205,12 +191,12 @@ private
 def return_error(code, message)
   $log.error message
     redirect '/', code, {:status => 2, \
-                                    :error_message => message}.to_json
+                         :error_message => message}.to_json
 end
 
 def list_entries(path)
   result      = []
-  working_dir = File.join( DB_DIR, path )
+  working_dir = File.join( $config['database_directory'], path )
   
   if File.directory? working_dir
     Dir.glob( File.join( working_dir, '*.yaml' ) ) do |entry|
@@ -241,8 +227,8 @@ end
 def list_views
   result      = []
 
-  if File.directory? VIEW_DIR
-    Dir.glob( File.join( VIEW_DIR, '*.yaml' ) ) do |entry|
+  if File.directory? $config['view_directory']
+    Dir.glob( File.join( $config['view_directory'], '*.yaml' ) ) do |entry|
       finding = Hash.new
       finding['name'] = File.basename(entry, '.yaml')
       finding['type'] = 'View'
@@ -251,7 +237,7 @@ def list_views
       result << finding
     end
   else
-    return_error( 404, "Can not find any view under '#{VIEW_DIR}'" )
+    return_error( 404, "Can not find any view under '#{$config['view_directory']}'" )
   end
 
   return result
@@ -259,7 +245,7 @@ end
 
 def read_data(path, options={})
   data       = Hash.new
-  actual_dir = DB_DIR
+  actual_dir = $config['database_directory'] 
   filename   = ''
 
   steps = path.split('/')
@@ -289,7 +275,7 @@ def read_data(path, options={})
 end
 
 def read_view(view)
-  filename = File.join(VIEW_DIR, "#{File.basename(view, '.yaml')}.yaml")
+  filename = File.join($config['view_directory'], "#{File.basename(view, '.yaml')}.yaml")
   if File.file?(filename)
     list = load_yaml(filename)
   else
@@ -316,7 +302,7 @@ end
 
 def get_relevantfile(path, key)
   data          = Hash.new
-  actual_dir    = DB_DIR
+  actual_dir    = $config['database_directory']
   filename      = ''
   relevant_file = ''
 
@@ -367,7 +353,7 @@ def load_yaml(filename)
 end
 
 def create_empty_yaml(path)
-  actual_dir = DB_DIR
+  actual_dir = $config['database_directory']
 
   steps = path.split('/')
   steps.each do |step|
@@ -395,7 +381,7 @@ def create_empty_yaml(path)
 end
 
 def update_yaml(path, data)
-  file = File.join( DB_DIR, path + '.yaml')
+  file = File.join( $config['database_directory'], path + '.yaml')
   unless File.file? file
     return_error 404, "Path #{path} does not exists"
   end
