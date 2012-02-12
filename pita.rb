@@ -8,8 +8,10 @@ require 'yaml'
 require 'yaml/store'
 require 'json'
 require 'log4r'
+require 'thread'
 
-require './lib/yaml_ops'
+require_relative 'lib/yaml_ops'
+require_relative 'lib/file_watcher'
 
 include Log4r
 
@@ -35,98 +37,28 @@ helpers do
   alias_method :h, :escape_html
 end
 
-class FileWatcher
-  attr_reader :path, :notifier
-  @@count = 0
-
-  def initialize(path)
-    @path     = path
-    @notifier = INotify::Notifier.new
-
-    #give a hint to inotify settings
-    if File.file? '/proc/sys/fs/inotify/max_user_watches'
-      max_user_watches = File.open('/proc/sys/fs/inotify/max_user_watches').read
-      if max_user_watches.to_i < 5000
-        $log.info "You should increase fs.inotify.max_user_watches to at least 5000"
-      end
-    end
-
-    @notifier.watch(@path, :recursive, :modify) do |event|
-      self.callback(event)
-    end
-    @@count += 1
-  end
-
-  def count
-    @@count
-  end
-
-  def run
-    @notifier.run
-  end
-
-  def callback(event)
-    changed_file = event.absolute_name.sub(/#{$config['database_directory']}/, '')
-    $log.debug "#{changed_file} changed! Evaluate callbacks."
-
-    YamlOps.load_yaml($config['callback_file']).each do |path, action|
-      if changed_file == path
-        if File.executable? action.split(/ /).first
-          $log.info "Callback triggered for #{path}. Will execute #{action}"
-          begin
-            run = EM::DeferrableChildProcess.open(action)
-            run.callback{$log.info "Command finished."}
-          rescue Exception => e
-            $log.error "Can not run command #{action}"
-            $log.debug e.message
-          end
-        else
-          $log.info "Callback triggered for #{path}. Will request #{action}"
-          begin
-            request = EM::HttpRequest.new(action).get
-            request.callback{$log.info "Request finished."}
-          rescue Exception => e
-            $log.error "Can not request url #{action}"
-            $log.debug e.message
-          end
-        end
-      end
-    end
-  end
-end
-
 # --- background thread ---
 file_observer = Thread.new do
   # we wait till the application is up and running
   sleep 0.5 while not Sinatra::Application.running?
 
   watcher = FileWatcher.new($config['database_directory'])
-  Thread.exit if watcher.count > 1
+  Thread.exit if FileWatcher.count > 1
 
-  $log.info "Observe #{$config['database_directory']} for changes with #{watcher.count.to_s} watcher."
-  if not EventMachine.reactor_running?
-    # we use our own reactor
-    EM.run do
-      watcher.run
-    end
-  else
-    # we use e.g. thin's reactor
+  $log.info "Observe #{$config['database_directory']} for changes with #{FileWatcher.count} watcher."
+  EM.run do
     watcher.run
   end
 end
 
 # --- filter ---
 before do
-  headers 'Content-Type' => "application/json;charset=utf-8"
+  content_type :json
 end
 
 $log.info "Database up and running!"
 
 # --- getter ---
-get '/debug' do
-  file_observer.inspect
-end
-
 get '/properties/*/key/:key.filename' do
   result = get_relevantfile(params[:splat].first, params[:key])
 
@@ -202,7 +134,7 @@ put '/properties/*' do
     return_error( 400, "Bad JSON received" )
   end
 
-  update_yaml( params[:splat].first, data )
+  YamlOps.update_yaml( params[:splat].first, data )
   redirect '/', 200
 end
 
@@ -217,12 +149,12 @@ post '/*' do
     return_error( 400, "Bad JSON received" )
   end
   
-  create_empty_yaml( data['path'] )
+  YamlOps.create_empty_yaml( data['path'] )
   redirect '/', 200
 end
 
 delete '/properties/*/:key' do
-  delete_key_in_yaml( params[:splat].first, params[:key] )
+  YamlOps.delete_key_in_yaml( params[:splat].first, params[:key] )
   redirect '/', 200
 end
 
@@ -297,7 +229,7 @@ def read_data(path, options={})
 
     $log.debug "Reading: #{File.expand_path(filename)}"
     begin
-      sub_data = load_yaml(filename)
+      sub_data = YamlOps.load_yaml(filename)
     rescue Exception => e
       $log.debug e.message
       return_error( 404, "Can not read #{filename} in database" )
@@ -317,7 +249,7 @@ end
 def read_view(view)
   filename = File.join($config['view_directory'], "#{File.basename(view, '.yaml')}.yaml")
   if File.file?(filename)
-    list = load_yaml(filename)
+    list = YamlOps.load_yaml(filename)
   else
     begin
       list = JSON.parse view
@@ -354,7 +286,7 @@ def get_relevantfile(path, key)
     
     $log.debug "Reading: #{File.expand_path(filename)}"
     begin
-      data = load_yaml(filename)
+      data = YamlOps.load_yaml(filename)
     rescue Exception => e
       $log.debug e.message
       return_error( 404, "Can not read #{filename} in database" )
