@@ -9,6 +9,8 @@ require 'yaml/store'
 require 'json'
 require 'log4r'
 
+require './lib/yaml_ops'
+
 include Log4r
 
 # load configuration settings
@@ -33,21 +35,41 @@ helpers do
   alias_method :h, :escape_html
 end
 
-# --- background thread ---
-file_observer = Thread.new do
-  if File.file? '/proc/sys/fs/inotify/max_user_watches'
-    max_user_watches = File.open('/proc/sys/fs/inotify/max_user_watches').read
-    if max_user_watches.to_i < 5000
-      $log.info "You should increase fs.inotify.max_user_watches to at least 5000"
+class FileWatcher
+  attr_reader :path, :notifier
+  @@count = 0
+
+  def initialize(path)
+    @path     = path
+    @notifier = INotify::Notifier.new
+
+    #give a hint to inotify settings
+    if File.file? '/proc/sys/fs/inotify/max_user_watches'
+      max_user_watches = File.open('/proc/sys/fs/inotify/max_user_watches').read
+      if max_user_watches.to_i < 5000
+        $log.info "You should increase fs.inotify.max_user_watches to at least 5000"
+      end
     end
+
+    @notifier.watch(@path, :recursive, :modify) do |event|
+      self.callback(event)
+    end
+    @@count += 1
   end
 
-  notifier = INotify::Notifier.new
-  $log.info "Observe #{$config['database_directory']} for changes."
-  notifier.watch($config['database_directory'], :recursive, :modify) do |event|
+  def count
+    @@count
+  end
+
+  def run
+    @notifier.run
+  end
+
+  def callback(event)
     changed_file = event.absolute_name.sub(/#{$config['database_directory']}/, '')
     $log.debug "#{changed_file} changed! Evaluate callbacks."
-    load_yaml($config['callback_file']).each do |path, action|
+
+    YamlOps.load_yaml($config['callback_file']).each do |path, action|
       if changed_file == path
         if File.executable? action.split(/ /).first
           $log.info "Callback triggered for #{path}. Will execute #{action}"
@@ -71,13 +93,25 @@ file_observer = Thread.new do
       end
     end
   end
+end
 
-  if not EM.reactor_running? 
+# --- background thread ---
+file_observer = Thread.new do
+  # we wait till the application is up and running
+  sleep 0.5 while not Sinatra::Application.running?
+
+  watcher = FileWatcher.new($config['database_directory'])
+  Thread.exit if watcher.count > 1
+
+  $log.info "Observe #{$config['database_directory']} for changes with #{watcher.count.to_s} watcher."
+  if not EventMachine.reactor_running?
+    # we use our own reactor
     EM.run do
-      notifier.run
+      watcher.run
     end
   else
-    notifier.run
+    # we use e.g. thin's reactor
+    watcher.run
   end
 end
 
@@ -89,6 +123,10 @@ end
 $log.info "Database up and running!"
 
 # --- getter ---
+get '/debug' do
+  file_observer.inspect
+end
+
 get '/properties/*/key/:key.filename' do
   result = get_relevantfile(params[:splat].first, params[:key])
 
@@ -328,98 +366,5 @@ def get_relevantfile(path, key)
   end
   return_error( 404, "Can not find Key #{key} in path #{path}" ) if relevant_file.empty?
   return relevant_file
-end
-
-def load_yaml(filename)
-  result = ""
-  if File.file? filename
-      begin
-        result = YAML::load_file(filename)
-      rescue StringIndexOutOfBoundsException => e
-        $log.error "YAML parsing in #{filename}"
-        $log.debug e.message
-        raise "YAML not parsable"
-        false
-      rescue Exception => e
-        $log.error "YAML parsing in #{filename}"
-        $log.debug e.message
-        raise "YAML not parsable"
-        false
-      end
-  else
-    raise "File nod found: #{filename}"
-  end
-  raise "Not a yaml file: #{filename}" if result == false
-  
-  return result
-end
-
-def create_empty_yaml(path)
-  actual_dir = $config['database_directory']
-
-  steps = path.split('/')
-  steps.each do |step|
-    next if step.empty?
-
-    actual_dir = File.join(actual_dir, step)
-    begin
-      unless File.directory? actual_dir
-        FileUtils.mkdir_p actual_dir
-        $log.info "Created directory #{actual_dir}"
-      end
-      unless File.file? actual_dir + '.yaml'
-        File.open(actual_dir + '.yaml', 'w') do |yaml_file|
-          YAML.dump(Hash.new, yaml_file)
-        end
-        $log.info "Created file #{actual_dir + '.yaml'}"
-      end
-    rescue Exception => e
-      $log.error "Can not create #{actual_dir}"
-      $log.debug e.message
-    end
-  end
-
-  return true
-end
-
-def update_yaml(path, data)
-  file = File.join( $config['database_directory'], path + '.yaml')
-  unless File.file? file
-    return_error 404, "Path #{path} does not exists"
-  end
-
-  begin
-    store = YAML::Store.new( file, :Indent => 2 )
-    $log.info "Updating #{File.expand_path file}"
-    store.transaction do
-      return_error 500, "Not a valid YAML #{File.expand_path file}"  if store.nil?
-      data.each_pair do |key, value|
-        store[key] = value
-      end
-    end
-  rescue Exception => e
-    return_error 500, "Can write to YAML file #{File.expand_path file}"
-  end
-
-  return true
-end
-
-def delete_key_in_yaml(path, key)
-  file = get_relevantfile(path, key)
-
-  begin
-    store = YAML::Store.new( file, :Indent => 2)
-    $log.info "Deleting #{key} from #{path} in #{file}"
-    store.transaction do
-      if store.nil?
-          $log.error "Not a valid yaml #{File.expand_path(file)}"
-      else
-        store.delete(key)
-      end
-    end
-  rescue Exception => e
-    $log.error "While deleting key #{key} from #{file}"
-    $log.debug e.message
-  end
 end
 
