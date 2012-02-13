@@ -59,8 +59,6 @@ before do
   content_type :json
 end
 
-$log.info "Database up and running!"
-
 # --- getter ---
 get '/properties/*/key/:key.filename' do
   result = get_relevantfile(params[:splat].first, params[:key])
@@ -161,11 +159,12 @@ delete '/properties/*/:key' do
   redirect '/', 200
 end
 
+$log.info "Database up and running!"
+
 # --- private functions ---
 private
 def return_error(code, message)
   $log.error message
-    redirect '/', code, {:status => 2, \
-                         :error_message => message}.to_json
+  redirect '/', code, {:status => 2, :error_message => message}.to_json
 end
 
