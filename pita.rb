@@ -35,6 +35,7 @@ $log.add(outputter)
 # --- helper ---
 helpers do
   include Rack::Utils
+  include YamlOps
   include FileOps
   alias_method :h, :escape_html
 end
@@ -136,7 +137,7 @@ put '/properties/*' do
     return_error( 400, "Bad JSON received" )
   end
 
-  YamlOps.update_yaml( params[:splat].first, data )
+  update_yaml( params[:splat].first, data )
   redirect '/', 200
 end
 
@@ -151,12 +152,12 @@ post '/*' do
     return_error( 400, "Bad JSON received" )
   end
   
-  YamlOps.create_empty_yaml( data['path'] )
+  create_empty_yaml( data['path'] )
   redirect '/', 200
 end
 
 delete '/properties/*/:key' do
-  YamlOps.delete_key_in_yaml( params[:splat].first, params[:key] )
+  delete_key_in_yaml( params[:splat].first, params[:key] )
   redirect '/', 200
 end
 

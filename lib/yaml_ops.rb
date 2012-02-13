@@ -1,5 +1,5 @@
-class YamlOps
-  def self.load_yaml(filename)
+module YamlOps
+  def load_yaml(filename)
     result = ""
     if File.file? filename
         begin
@@ -23,7 +23,7 @@ class YamlOps
     return result
   end
   
-  def self.create_empty_yaml(path)
+  def create_empty_yaml(path)
     actual_dir = $config['database_directory']
   
     steps = path.split('/')
@@ -51,7 +51,7 @@ class YamlOps
     return true
   end
   
-  def self.update_yaml(path, data)
+  def update_yaml(path, data)
     file = File.join( $config['database_directory'], path + '.yaml')
     unless File.file? file
       return_error 404, "Path #{path} does not exists"
@@ -73,7 +73,7 @@ class YamlOps
     return true
   end
   
-  def self.delete_key_in_yaml(path, key)
+  def delete_key_in_yaml(path, key)
     file = get_relevantfile(path, key)
   
     begin
